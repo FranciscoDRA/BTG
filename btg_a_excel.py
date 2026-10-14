@@ -13,7 +13,8 @@ from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font
 
 FECHA = re.compile(r"^\s*(\d{2}/\d{2}/\d{4})\s+(.*)$")
-MONTO = re.compile(r"-?\d{1,3}(?:\.\d{3})*,\d{2}")
+MONTO = re.compile(r"-?\d{1,3}(?:\.\d{3})*,\d{2}(?![\d])")
+ENTERO = re.compile(r"\s*(-?\d{1,3}(?:\.\d{3})*)\s*$")
 
 
 def a_decimal(txt):
@@ -31,30 +32,50 @@ def parsear(pdf_bytes):
             continue
         fecha, resto = m.groups()
         montos = list(MONTO.finditer(resto))
-        if len(montos) < 2:
+        if not montos:
             continue
-        importe, saldo = montos[-2].group(), montos[-1].group()
-        descripcion = resto[: montos[-2].start()].strip()
+        saldo = saldo_entero = None
+        if len(montos) >= 2 and not resto[montos[-1].end():].strip():
+            imp_m = montos[-2]
+            saldo = a_decimal(montos[-1].group())
+        else:
+            # Saldo recortado por el borde de la hoja (ej. "-2.391") o ausente
+            imp_m = montos[-1]
+            e = ENTERO.match(resto[imp_m.end():])
+            if e:
+                saldo_entero = int(e.group(1).replace(".", ""))
+        descripcion = resto[: imp_m.start()].strip()
         # Concepto y Referencia/Cheque vienen separados por 2+ espacios -> se unen con 1
         concepto = " ".join(p.strip() for p in re.split(r"\s{2,}", descripcion) if p.strip())
-        valor = a_decimal(importe)
+        valor = a_decimal(imp_m.group())
         filas.append({
             "fecha": datetime.strptime(fecha, "%d/%m/%Y"),
             "concepto": concepto,
             "debito": -valor if valor < 0 else Decimal("0"),
             "credito": valor if valor > 0 else Decimal("0"),
-            "saldo": a_decimal(saldo),
+            "saldo": saldo,
+            "saldo_entero": saldo_entero,
         })
     return filas
 
 
 def validar(filas):
-    """Chequea que saldo anterior - débito + crédito = saldo de cada línea."""
+    """Chequea saldo anterior - débito + crédito = saldo. Si el saldo está recortado
+    en el PDF, compara solo la parte entera (tolerancia de 2 pesos)."""
     errores = []
+
+    def entero(f):
+        return int(f["saldo"]) if f["saldo"] is not None else f["saldo_entero"]
+
     for i in range(1, len(filas)):
-        esperado = filas[i - 1]["saldo"] - filas[i]["debito"] + filas[i]["credito"]
-        if esperado != filas[i]["saldo"]:
-            errores.append(f"Fila {i + 1}: saldo esperado {esperado}, PDF dice {filas[i]['saldo']}")
+        a, b = filas[i - 1], filas[i]
+        neto = b["credito"] - b["debito"]
+        if a["saldo"] is not None and b["saldo"] is not None:
+            if a["saldo"] + neto != b["saldo"]:
+                errores.append(f"Fila {i + 1}: saldo esperado {a['saldo'] + neto}, PDF dice {b['saldo']}")
+        elif entero(a) is not None and entero(b) is not None:
+            if abs((entero(b) - entero(a)) - neto) >= 2:
+                errores.append(f"Fila {i + 1}: el saldo (sin centavos) no cuadra")
     return errores
 
 

@@ -1,6 +1,7 @@
 // Parser de extractos BTG Pactual (iBanca) -> movimientos. Corre en el navegador y en Node.
 const FECHA = /^\d{2}\/\d{2}\/\d{4}$/;
 const MONTO = /^-?\d{1,3}(?:\.\d{3})*,\d{2}$/;
+const ENTERO = /^-?\d{1,3}(?:\.\d{3})*$/;
 
 const aCentavos = (t) => Math.round(parseFloat(t.replace(/\./g, "").replace(",", ".")) * 100);
 
@@ -32,9 +33,20 @@ export async function parsearPdf(pdfjsLib, data) {
       const first = tokens[0].split(/\s+/)[0];
       if (!FECHA.test(first)) continue;
       const resto = [tokens[0].slice(first.length).trim(), ...tokens.slice(1)].filter(Boolean);
+      // Montos completos (con centavos). El último es el importe salvo que haya saldo completo después.
       const montosIdx = resto.map((t, i) => (MONTO.test(t) ? i : -1)).filter((i) => i >= 0);
-      if (montosIdx.length < 2) continue;
-      const iImp = montosIdx[montosIdx.length - 2], iSal = montosIdx[montosIdx.length - 1];
+      if (!montosIdx.length) continue;
+      let iImp, saldo = null, saldoEntero = null;
+      const ultimo = resto.length - 1;
+      if (montosIdx.length >= 2 && montosIdx[montosIdx.length - 1] === ultimo) {
+        iImp = montosIdx[montosIdx.length - 2];
+        saldo = aCentavos(resto[ultimo]);
+      } else {
+        // Saldo recortado por el borde de la hoja (ej. "-2.391" en vez de "-2.391,07") o ausente
+        iImp = montosIdx[montosIdx.length - 1];
+        const sig = resto[iImp + 1];
+        if (sig && ENTERO.test(sig)) saldoEntero = parseInt(sig.replace(/\./g, ""), 10);
+      }
       const imp = aCentavos(resto[iImp]);
       const [d, m, a] = first.split("/").map(Number);
       movs.push({
@@ -42,21 +54,35 @@ export async function parsearPdf(pdfjsLib, data) {
         concepto: resto.slice(0, iImp).join(" ").replace(/\s+/g, " ").trim(),
         debito: imp < 0 ? -imp : 0,     // en centavos
         credito: imp > 0 ? imp : 0,
-        saldo: aCentavos(resto[iSal]),
+        saldo,                          // en centavos, o null si está recortado
+        saldoEntero,                    // pesos sin centavos cuando el saldo está recortado
       });
     }
   }
   return movs;
 }
 
-/** Devuelve la lista de filas donde saldo anterior - débito + crédito != saldo. */
+/**
+ * Devuelve { errores: [nº de fila...], aproximado: bool }.
+ * Con saldo completo: saldo anterior - débito + crédito = saldo (exacto).
+ * Con saldo recortado: compara solo la parte entera (tolerancia de 2 pesos).
+ */
 export function validar(movs) {
   const errores = [];
+  let aproximado = false;
+  const entero = (m) => (m.saldo !== null ? Math.trunc(m.saldo / 100) : m.saldoEntero);
   for (let i = 1; i < movs.length; i++) {
-    const esperado = movs[i - 1].saldo - movs[i].debito + movs[i].credito;
-    if (esperado !== movs[i].saldo) errores.push(i + 1);
+    const a = movs[i - 1], b = movs[i], neto = b.credito - b.debito;
+    if (a.saldo !== null && b.saldo !== null) {
+      if (a.saldo + neto !== b.saldo) errores.push(i + 1);
+    } else if (entero(a) !== null && entero(b) !== null) {
+      aproximado = true;
+      if (Math.abs((entero(b) - entero(a)) * 100 - neto) >= 200) errores.push(i + 1);
+    } else {
+      aproximado = true;
+    }
   }
-  return errores;
+  return { errores, aproximado };
 }
 
 /** Genera el .xlsx (ArrayBuffer) con ExcelJS. */

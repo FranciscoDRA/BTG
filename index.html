@@ -45,6 +45,10 @@
   td.n, th.n { text-align: right; }
   td.c { white-space: normal; min-width: 220px; }
   tr.bad td { background: var(--err-soft); }
+  .toolbar { display: flex; justify-content: flex-end; margin-top: 20px; }
+  .toolbar + #results .result:first-child { margin-top: 10px; }
+  button.ghost { background: transparent; color: var(--muted); border: 1px solid var(--line); }
+  button.ghost:hover { color: var(--text); filter: none; border-color: var(--muted); }
   .msg { padding: 16px 18px; color: var(--err); }
   footer { margin-top: 40px; font-size: 13px; color: var(--muted); }
   footer a { color: var(--accent); }
@@ -62,6 +66,7 @@
   </label>
   <p class="privacy">🔒 Todo se procesa en tu navegador. El PDF no se sube a ningún servidor.</p>
 
+  <div class="toolbar" id="toolbar" hidden><button type="button" class="ghost" id="clear">Limpiar</button></div>
   <div id="results"></div>
 
   <footer>Código fuente en <a href="https://github.com/FranciscoDRA/BTG">github.com/FranciscoDRA/BTG</a></footer>
@@ -84,14 +89,17 @@
     box.className = "result";
     box.innerHTML = `<div class="head"><div><div class="name">${esc(file.name)}</div><div class="meta">Procesando…</div></div></div>`;
     $res.prepend(box);
+    document.getElementById("toolbar").hidden = false;
     try {
       const movs = await parsearPdf(pdfjsLib, new Uint8Array(await file.arrayBuffer()));
       if (!movs.length) throw new Error("No encontré movimientos. ¿Es un extracto de BTG iBanca con texto (no escaneado)?");
-      const errores = new Set(validar(movs));
+      const v = validar(movs), errores = new Set(v.errores);
       const deb = movs.reduce((s, m) => s + m.debito, 0), cred = movs.reduce((s, m) => s + m.credito, 0);
       const badge = errores.size
         ? `<span class="badge err">${errores.size} fila(s) no cuadran con el saldo</span>`
-        : `<span class="badge ok">Saldos verificados</span>`;
+        : v.aproximado
+          ? `<span class="badge ok" title="La columna Saldo está recortada en el PDF; se verificó sin centavos">Saldos verificados (aprox.)</span>`
+          : `<span class="badge ok">Saldos verificados</span>`;
       box.innerHTML = `
         <div class="head">
           <div>
@@ -118,6 +126,7 @@
     }
   }
 
+  document.getElementById("clear").onclick = () => { $res.innerHTML = ""; document.getElementById("toolbar").hidden = true; };
   const handle = (files) => [...files].filter((f) => /\.pdf$/i.test(f.name) || f.type === "application/pdf").forEach(procesar);
   $file.addEventListener("change", () => { handle($file.files); $file.value = ""; });
   ["dragenter", "dragover"].forEach((ev) => $drop.addEventListener(ev, (e) => { e.preventDefault(); $drop.classList.add("over"); }));

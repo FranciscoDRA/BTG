@@ -61,6 +61,7 @@ curl -F "archivo=@extracto.pdf" http://localhost:8000/convertir -o extracto.xlsx
 ## Limitaciones
 
 - Solo está probado con extractos de BTG en pesos (UYU) exportados desde iBanca.
+- Si la columna Saldo sale recortada en el PDF (pasa al imprimir desde iBanca), igual funciona: los importes son exactos y el saldo se verifica sin centavos.
 - Si el PDF es una imagen escaneada sin texto, no funciona porque no hace OCR.
 
 > ⚠️ Los extractos tienen datos bancarios reales. El `.gitignore` ya excluye `*.pdf` y `*.xlsx`: no los subas al repo.
