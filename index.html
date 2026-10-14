@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BTG PDF a Excel</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --card: #fff; --text: #1a1d23; --muted: #646b78; --line: #e2e5ea;
+    --accent: #0b5cff; --accent-soft: #e8efff; --ok: #137a3f; --ok-soft: #e4f5ea; --err: #b42318; --err-soft: #fdecea;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f1115; --card: #171a21; --text: #e7e9ee; --muted: #9aa1ad; --line: #2a2f39;
+      --accent: #6b9bff; --accent-soft: #1a2540; --ok: #5cc98a; --ok-soft: #14291d; --err: #ff8a80; --err-soft: #2e1715;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 860px; margin: 0 auto; padding: 40px 16px 64px; }
+  h1 { font-size: 26px; margin: 0 0 6px; letter-spacing: -0.01em; }
+  .sub { color: var(--muted); margin: 0 0 28px; }
+  .drop {
+    display: block; border: 2px dashed var(--line); border-radius: 14px; background: var(--card);
+    padding: 44px 20px; text-align: center; cursor: pointer; transition: border-color .15s, background .15s;
+  }
+  .drop:hover, .drop.over { border-color: var(--accent); background: var(--accent-soft); }
+  .drop strong { display: block; font-size: 17px; margin-bottom: 4px; }
+  .drop span { color: var(--muted); font-size: 14px; }
+  input[type=file] { display: none; }
+  .privacy { margin: 12px 0 0; font-size: 13px; color: var(--muted); }
+  .result { background: var(--card); border: 1px solid var(--line); border-radius: 14px; margin-top: 20px; overflow: hidden; }
+  .head { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; padding: 16px 18px; border-bottom: 1px solid var(--line); }
+  .name { font-weight: 600; word-break: break-all; }
+  .meta { color: var(--muted); font-size: 13px; margin-top: 2px; }
+  .badge { display: inline-block; font-size: 12px; font-weight: 600; padding: 2px 8px; border-radius: 99px; margin-left: 6px; }
+  .badge.ok { color: var(--ok); background: var(--ok-soft); }
+  .badge.err { color: var(--err); background: var(--err-soft); }
+  button { font: inherit; font-weight: 600; border: 0; border-radius: 9px; padding: 9px 16px; background: var(--accent); color: #fff; cursor: pointer; }
+  button:hover { filter: brightness(1.08); }
+  .scroll { max-height: 360px; overflow: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; font-variant-numeric: tabular-nums; }
+  th, td { padding: 7px 12px; text-align: left; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  th { position: sticky; top: 0; background: var(--card); color: var(--muted); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .03em; }
+  td.n, th.n { text-align: right; }
+  td.c { white-space: normal; min-width: 220px; }
+  tr.bad td { background: var(--err-soft); }
+  .msg { padding: 16px 18px; color: var(--err); }
+  footer { margin-top: 40px; font-size: 13px; color: var(--muted); }
+  footer a { color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Extracto BTG → Excel</h1>
+  <p class="sub">Convierte el PDF de "Últimos movimientos" de iBanca (BTG Pactual Uruguay) a un Excel con Fecha, Concepto, Débito y Crédito.</p>
+
+  <label class="drop" id="drop">
+    <input type="file" id="file" accept="application/pdf" multiple>
+    <strong>Arrastrá los PDFs acá o hacé clic para elegirlos</strong>
+    <span>Podés subir varios meses a la vez</span>
+  </label>
+  <p class="privacy">🔒 Todo se procesa en tu navegador. El PDF no se sube a ningún servidor.</p>
+
+  <div id="results"></div>
+
+  <footer>Código fuente en <a href="https://github.com/FranciscoDRA/BTG">github.com/FranciscoDRA/BTG</a></footer>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
+<script type="module">
+  import * as pdfjsLib from "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/build/pdf.min.mjs";
+  import { parsearPdf, validar, aExcel } from "./parser.js";
+  pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/build/pdf.worker.min.mjs";
+
+  const $drop = document.getElementById("drop"), $file = document.getElementById("file"), $res = document.getElementById("results");
+  const fmt = new Intl.NumberFormat("es-UY", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const money = (c) => (c ? fmt.format(c / 100) : "");
+  const fecha = (d) => d.toLocaleDateString("es-UY", { timeZone: "UTC", day: "2-digit", month: "2-digit", year: "2-digit" });
+  const esc = (s) => s.replace(/[&<>"]/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[ch]));
+
+  async function procesar(file) {
+    const box = document.createElement("section");
+    box.className = "result";
+    box.innerHTML = `<div class="head"><div><div class="name">${esc(file.name)}</div><div class="meta">Procesando…</div></div></div>`;
+    $res.prepend(box);
+    try {
+      const movs = await parsearPdf(pdfjsLib, new Uint8Array(await file.arrayBuffer()));
+      if (!movs.length) throw new Error("No encontré movimientos. ¿Es un extracto de BTG iBanca con texto (no escaneado)?");
+      const errores = new Set(validar(movs));
+      const deb = movs.reduce((s, m) => s + m.debito, 0), cred = movs.reduce((s, m) => s + m.credito, 0);
+      const badge = errores.size
+        ? `<span class="badge err">${errores.size} fila(s) no cuadran con el saldo</span>`
+        : `<span class="badge ok">Saldos verificados</span>`;
+      box.innerHTML = `
+        <div class="head">
+          <div>
+            <div class="name">${esc(file.name)}${badge}</div>
+            <div class="meta">${movs.length} movimientos · Débitos ${money(deb)} · Créditos ${money(cred)}</div>
+          </div>
+          <button type="button">Descargar Excel</button>
+        </div>
+        <div class="scroll"><table>
+          <thead><tr><th>Fecha</th><th>Concepto</th><th class="n">Débito</th><th class="n">Crédito</th></tr></thead>
+          <tbody>${movs.map((m, i) => `<tr class="${errores.has(i + 1) ? "bad" : ""}"><td>${fecha(m.fecha)}</td><td class="c">${esc(m.concepto)}</td><td class="n">${money(m.debito)}</td><td class="n">${money(m.credito)}</td></tr>`).join("")}</tbody>
+        </table></div>`;
+      box.querySelector("button").onclick = async () => {
+        const buf = await aExcel(window.ExcelJS, movs);
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }));
+        a.download = file.name.replace(/\.pdf$/i, "") + "_extraido.xlsx";
+        a.click();
+        setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+      };
+    } catch (e) {
+      box.querySelector(".meta").remove();
+      box.insertAdjacentHTML("beforeend", `<div class="msg">${esc(e.message || String(e))}</div>`);
+    }
+  }
+
+  const handle = (files) => [...files].filter((f) => /\.pdf$/i.test(f.name) || f.type === "application/pdf").forEach(procesar);
+  $file.addEventListener("change", () => { handle($file.files); $file.value = ""; });
+  ["dragenter", "dragover"].forEach((ev) => $drop.addEventListener(ev, (e) => { e.preventDefault(); $drop.classList.add("over"); }));
+  ["dragleave", "drop"].forEach((ev) => $drop.addEventListener(ev, (e) => { e.preventDefault(); $drop.classList.remove("over"); }));
+  $drop.addEventListener("drop", (e) => handle(e.dataTransfer.files));
+</script>
+</body>
+</html>
