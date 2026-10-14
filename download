@@ -1,0 +1,9 @@
+# Nunca subir extractos ni resultados: tienen datos bancarios reales
+*.pdf
+*.xlsx
+*.xls
+*.csv
+__pycache__/
+.venv/
+venv/
+.env
